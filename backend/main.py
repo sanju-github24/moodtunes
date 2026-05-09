@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 # ── Load model with Keras version compatibility ───────────────────────────────
-MODEL_PATH = "emotion_model.h5"
+MODEL_PATH = "emotion_model.keras"
 GDRIVE_FILE_ID = "1OUcY5hrPMCH-zkYZ_46tPp4BYC4HKip8"  # ← your Google Drive file ID
 
 def download_model():
