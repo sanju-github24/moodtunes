@@ -10,7 +10,7 @@ from tensorflow.keras.models import load_model
 
 # ── Download model from Google Drive if not present ──────────────────────────
 MODEL_PATH = "emotion_model.h5"
-GDRIVE_FILE_ID = "YOUR_GDRIVE_FILE_ID"  # ← paste your Google Drive file ID here
+GDRIVE_FILE_ID = "1go-epDnBUrtGPBBQ1vHynmZoL7Fg18K6"  # ← paste your Google Drive file ID here
 
 if not os.path.exists(MODEL_PATH):
     print("Downloading emotion model from Google Drive...")
