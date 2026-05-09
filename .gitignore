@@ -1,0 +1,7 @@
+emotion_model.h5
+__pycache__/
+*.pyc
+node_modules/
+.env
+venv/
+.DS_Store
