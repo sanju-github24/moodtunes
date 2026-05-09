@@ -1,61 +1,23 @@
 import os
-import gdown
 import numpy as np
 import cv2
 import requests
+import json
 from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-# ── Load model with Keras version compatibility ───────────────────────────────
-MODEL_PATH = "emotion_model.keras"
-GDRIVE_FILE_ID = "1OUcY5hrPMCH-zkYZ_46tPp4BYC4HKip8"  # ← your Google Drive file ID
+# ── Load model from weights + config (committed directly to repo) ─────────────
+WEIGHTS_PATH = "emotion_weights.weights.h5"
+CONFIG_PATH  = "model_config.json"
 
-def download_model():
-    print("Downloading emotion model from Google Drive...")
-    # fuzzy=True handles the Google Drive virus-scan warning page
-    url = f"https://drive.google.com/uc?id={GDRIVE_FILE_ID}"
-    gdown.download(url, MODEL_PATH, quiet=False, fuzzy=True)
-    # Verify it's a real file, not an HTML error page
-    if os.path.getsize(MODEL_PATH) < 100_000:
-        os.remove(MODEL_PATH)
-        raise RuntimeError(
-            f"Downloaded file is too small — likely an HTML error page. "
-            f"Make sure the Google Drive file is shared as 'Anyone with the link'."
-        )
-    print("Model downloaded successfully!")
+from tensorflow.keras.models import model_from_json
 
-if not os.path.exists(MODEL_PATH):
-    download_model()
+with open(CONFIG_PATH, "r") as f:
+    model = model_from_json(f.read())
 
-# Try loading with Keras 3 first, fall back to older API
-try:
-    import keras
-    # Strip quantization_config by using custom_objects
-    from tensorflow.keras.models import load_model
-    model = load_model(MODEL_PATH, compile=False)
-    print("Model loaded!")
-except TypeError as e:
-    if "quantization_config" in str(e):
-        print("Keras version mismatch detected — patching model config...")
-        import h5py, json, io
-        # Read and patch the model config in-memory
-        with h5py.File(MODEL_PATH, "r+") as f:
-            raw = f.attrs.get("model_config", None)
-            if raw is not None:
-                if isinstance(raw, bytes):
-                    config_str = raw.decode("utf-8")
-                else:
-                    config_str = str(raw)
-                config_str = config_str.replace('"quantization_config": null,', "")
-                config_str = config_str.replace(', "quantization_config": null', "")
-                f.attrs["model_config"] = config_str.encode("utf-8")
-                print("Patched model config.")
-        from tensorflow.keras.models import load_model
-        model = load_model(MODEL_PATH, compile=False)
-        print("Model loaded after patch!")
-    else:
-        raise
+model.load_weights(WEIGHTS_PATH)
+print("Model loaded!")
 
 # ── App setup ─────────────────────────────────────────────────────────────────
 app = FastAPI()
@@ -68,7 +30,7 @@ app.add_middleware(
 )
 
 # ── Config ────────────────────────────────────────────────────────────────────
-YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")  # set in Render env vars
+YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
 
 EMOTION_LABELS = ['angry', 'disgust', 'fear', 'happy', 'neutral', 'sad', 'surprise']
 EMOTION_MAP = {
