@@ -1,30 +1,47 @@
-
-from fastapi import FastAPI, File, UploadFile, Form
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+import os
+import gdown
 import numpy as np
 import cv2
 import requests
+from fastapi import FastAPI, File, UploadFile, Form
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from tensorflow.keras.models import load_model
- 
+
+# ── Download model from Google Drive if not present ──────────────────────────
+MODEL_PATH = "emotion_model.h5"
+GDRIVE_FILE_ID = "YOUR_GDRIVE_FILE_ID"  # ← paste your Google Drive file ID here
+
+if not os.path.exists(MODEL_PATH):
+    print("Downloading emotion model from Google Drive...")
+    gdown.download(
+        f"https://drive.google.com/uc?id={GDRIVE_FILE_ID}",
+        MODEL_PATH,
+        quiet=False
+    )
+    print("Model downloaded successfully!")
+
+model = load_model(MODEL_PATH)
+print("Model loaded!")
+
+# ── App setup ─────────────────────────────────────────────────────────────────
 app = FastAPI()
- 
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
- 
-model = load_model("emotion_model.h5")
- 
+
+# ── Config ────────────────────────────────────────────────────────────────────
+YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY", "")  # set in Render env vars
+
 EMOTION_LABELS = ['angry', 'disgust', 'fear', 'happy', 'neutral', 'sad', 'surprise']
 EMOTION_MAP = {
     'angry': 'angry', 'disgust': 'angry', 'fear': 'fear',
     'happy': 'happy', 'neutral': 'neutral', 'sad': 'sad', 'surprise': 'surprise'
 }
-
-YOUTUBE_API_KEY = "AIzaSyA2PqeGd-X3jYCDUX12P8H8TcFyaaYKDJc"
 
 LANGUAGE_TERMS = {
     "Tamil":     "Tamil தமிழ்",
@@ -35,9 +52,7 @@ LANGUAGE_TERMS = {
     "Kannada":   "Kannada ಕನ್ನಡ",
     "Punjabi":   "Punjabi ਪੰਜਾਬੀ",
 }
- 
-# Multiple query variations per emotion per mood_type
-# Each load more call cycles to the next query variation → truly different songs
+
 MOOD_QUERIES = {
     "happy": {
         "match":    [
@@ -136,7 +151,7 @@ MOOD_QUERIES = {
         ],
     },
 }
- 
+
 EMOTION_COLORS = {
     "happy": "#FFD93D", "sad": "#6C9BCF", "angry": "#FF6B6B",
     "fear": "#A29BFE", "neutral": "#B2BEC3", "surprise": "#FD79A8",
@@ -145,8 +160,8 @@ EMOTION_EMOJIS = {
     "happy": "😄", "sad": "😢", "angry": "😠",
     "fear": "😨", "neutral": "😐", "surprise": "😲",
 }
- 
- 
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
 def detect_emotion(image_bytes):
     np_arr = np.frombuffer(image_bytes, np.uint8)
     img_bgr = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
@@ -173,8 +188,8 @@ def detect_emotion(image_bytes):
         score = round(float(predictions[i]) * 100, 1)
         all_scores[mapped] = all_scores.get(mapped, 0) + score
     return emotion, round(confidence, 1), all_scores
- 
- 
+
+
 def search_youtube(query, max_results=6, page_token=None):
     url = "https://www.googleapis.com/youtube/v3/search"
     params = {
@@ -206,8 +221,9 @@ def search_youtube(query, max_results=6, page_token=None):
             "url":       f"https://www.youtube.com/watch?v={vid_id}",
         })
     return songs, data.get("nextPageToken")
- 
- 
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
 @app.post("/detect")
 async def detect(
     file: UploadFile = File(...),
@@ -219,7 +235,6 @@ async def detect(
     if emotion is None:
         return JSONResponse({"error": confidence}, status_code=400)
     lang_term = LANGUAGE_TERMS.get(language, language)
-    # Always use first query variation for initial detect
     query = MOOD_QUERIES[emotion][mood_type][0].replace("{lang}", lang_term)
     songs, next_page_token = search_youtube(query, max_results=6)
     return {
@@ -230,8 +245,8 @@ async def detect(
         "next_page_token": next_page_token,
         "query_index": 0,
     }
- 
- 
+
+
 @app.post("/more")
 async def more_songs(
     emotion: str = Form(...),
@@ -239,46 +254,43 @@ async def more_songs(
     mood_type: str = Form("match"),
     query_index: int = Form(0),
     page_token: str = Form(None),
-    seen_ids: str = Form(""),  # comma-separated video IDs already shown
+    seen_ids: str = Form(""),
 ):
     lang_term = LANGUAGE_TERMS.get(language, language)
     queries = MOOD_QUERIES.get(emotion, {}).get(mood_type, ["{lang} songs"])
     seen = set(seen_ids.split(",")) if seen_ids else set()
- 
+
     all_new_songs = []
     current_index = query_index
     current_token = page_token
- 
-    # Keep fetching until we have 6 NEW unique songs
     attempts = 0
+
     while len(all_new_songs) < 6 and attempts < 8:
         q = queries[current_index % len(queries)].replace("{lang}", lang_term)
         songs, next_token = search_youtube(q, max_results=10, page_token=current_token)
- 
+
         for s in songs:
-            if s["video_id"] not in seen and s not in all_new_songs:
+            if s["video_id"] not in seen:
                 seen.add(s["video_id"])
                 all_new_songs.append(s)
                 if len(all_new_songs) >= 6:
                     break
- 
-        # Move to next query variation if this one is exhausted
+
         if not next_token or len(songs) == 0:
             current_index += 1
             current_token = None
         else:
             current_token = next_token
- 
+
         attempts += 1
- 
+
     return {
         "songs": all_new_songs[:6],
         "next_page_token": current_token,
         "query_index": current_index,
     }
- 
- 
+
+
 @app.get("/health")
 def health():
-    return {"status": "ok"}
- 
+    return {"status": "ok", "model": "loaded"}
