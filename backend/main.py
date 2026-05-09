@@ -6,23 +6,56 @@ import requests
 from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from tensorflow.keras.models import load_model
 
-# ── Download model from Google Drive if not present ──────────────────────────
+# ── Load model with Keras version compatibility ───────────────────────────────
 MODEL_PATH = "emotion_model.h5"
-GDRIVE_FILE_ID = "1OUcY5hrPMCH-zkYZ_46tPp4BYC4HKip8"  # ← paste your Google Drive file ID here
+GDRIVE_FILE_ID = "1OUcY5hrPMCH-zkYZ_46tPp4BYC4HKip8"  # ← your Google Drive file ID
 
-if not os.path.exists(MODEL_PATH):
+def download_model():
     print("Downloading emotion model from Google Drive...")
-    gdown.download(
-        f"https://drive.google.com/uc?id={GDRIVE_FILE_ID}",
-        MODEL_PATH,
-        quiet=False
-    )
+    # fuzzy=True handles the Google Drive virus-scan warning page
+    url = f"https://drive.google.com/uc?id={GDRIVE_FILE_ID}"
+    gdown.download(url, MODEL_PATH, quiet=False, fuzzy=True)
+    # Verify it's a real file, not an HTML error page
+    if os.path.getsize(MODEL_PATH) < 100_000:
+        os.remove(MODEL_PATH)
+        raise RuntimeError(
+            f"Downloaded file is too small — likely an HTML error page. "
+            f"Make sure the Google Drive file is shared as 'Anyone with the link'."
+        )
     print("Model downloaded successfully!")
 
-model = load_model(MODEL_PATH, compile=False)
-print("Model loaded!")
+if not os.path.exists(MODEL_PATH):
+    download_model()
+
+# Try loading with Keras 3 first, fall back to older API
+try:
+    import keras
+    # Strip quantization_config by using custom_objects
+    from tensorflow.keras.models import load_model
+    model = load_model(MODEL_PATH, compile=False)
+    print("Model loaded!")
+except TypeError as e:
+    if "quantization_config" in str(e):
+        print("Keras version mismatch detected — patching model config...")
+        import h5py, json, io
+        # Read and patch the model config in-memory
+        with h5py.File(MODEL_PATH, "r+") as f:
+            raw = f.attrs.get("model_config", None)
+            if raw is not None:
+                if isinstance(raw, bytes):
+                    config_str = raw.decode("utf-8")
+                else:
+                    config_str = str(raw)
+                config_str = config_str.replace('"quantization_config": null,', "")
+                config_str = config_str.replace(', "quantization_config": null', "")
+                f.attrs["model_config"] = config_str.encode("utf-8")
+                print("Patched model config.")
+        from tensorflow.keras.models import load_model
+        model = load_model(MODEL_PATH, compile=False)
+        print("Model loaded after patch!")
+    else:
+        raise
 
 # ── App setup ─────────────────────────────────────────────────────────────────
 app = FastAPI()
@@ -55,7 +88,7 @@ LANGUAGE_TERMS = {
 
 MOOD_QUERIES = {
     "happy": {
-        "match":    [
+        "match": [
             "{lang} super hit happy songs",
             "{lang} peppy dance songs hits",
             "{lang} feel good chartbusters",
@@ -71,7 +104,7 @@ MOOD_QUERIES = {
         ],
     },
     "sad": {
-        "match":    [
+        "match": [
             "{lang} sad melody heart touching songs",
             "{lang} emotional breakup songs",
             "{lang} melancholy slow songs",
@@ -87,7 +120,7 @@ MOOD_QUERIES = {
         ],
     },
     "angry": {
-        "match":    [
+        "match": [
             "{lang} mass BGM energetic beat songs",
             "{lang} powerful mass songs",
             "{lang} intense action songs",
@@ -103,7 +136,7 @@ MOOD_QUERIES = {
         ],
     },
     "fear": {
-        "match":    [
+        "match": [
             "{lang} thriller suspense bgm songs",
             "{lang} dark mysterious songs",
             "{lang} horror bgm music",
@@ -119,7 +152,7 @@ MOOD_QUERIES = {
         ],
     },
     "neutral": {
-        "match":    [
+        "match": [
             "{lang} latest trending hit songs 2024",
             "{lang} top chart songs this year",
             "{lang} most popular songs playlist",
@@ -135,7 +168,7 @@ MOOD_QUERIES = {
         ],
     },
     "surprise": {
-        "match":    [
+        "match": [
             "{lang} celebration special songs",
             "{lang} festival songs hits",
             "{lang} party celebration songs",
@@ -165,6 +198,8 @@ EMOTION_EMOJIS = {
 def detect_emotion(image_bytes):
     np_arr = np.frombuffer(image_bytes, np.uint8)
     img_bgr = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+    if img_bgr is None:
+        return None, None, "Could not decode image."
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
     face_cascade = cv2.CascadeClassifier(
         cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
@@ -233,7 +268,7 @@ async def detect(
     image_bytes = await file.read()
     emotion, confidence, all_scores = detect_emotion(image_bytes)
     if emotion is None:
-        return JSONResponse({"error": confidence}, status_code=400)
+        return JSONResponse({"error": all_scores}, status_code=400)
     lang_term = LANGUAGE_TERMS.get(language, language)
     query = MOOD_QUERIES[emotion][mood_type][0].replace("{lang}", lang_term)
     songs, next_page_token = search_youtube(query, max_results=6)
