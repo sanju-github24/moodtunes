@@ -11,7 +11,7 @@ const EMOTION_THEMES = {
   surprise: { accent: "#FD79A8", glow: "#FD79A840", emoji: "😲", particle: "★", label: "SURPRISE" },
 };
 
-const API = "http://localhost:8000";
+const API = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 function Particles({ theme }) {
   return (
