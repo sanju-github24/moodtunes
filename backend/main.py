@@ -21,7 +21,7 @@ if not os.path.exists(MODEL_PATH):
     )
     print("Model downloaded successfully!")
 
-model = load_model(MODEL_PATH)
+model = load_model(MODEL_PATH, compile=False)
 print("Model loaded!")
 
 # ── App setup ─────────────────────────────────────────────────────────────────
